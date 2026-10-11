@@ -1,0 +1,23 @@
+# One app per machine (give each a distinct name), installed to the workspace
+# that hosts the private relay channel. No events or Socket Mode: the relay
+# polls channel history.
+display_information:
+  name: agent-relay-work
+  description: Agent relay bot for one machine
+features:
+  bot_user:
+    display_name: agent-relay-work
+    always_online: false
+oauth_config:
+  scopes:
+    bot:
+      - chat:write
+      - channels:history
+      - groups:history
+      - channels:read
+      - groups:read
+      - users:read
+settings:
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false

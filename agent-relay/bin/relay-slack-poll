@@ -1,0 +1,44 @@
+#!/bin/bash
+# relay-slack-poll -- poll the relay Slack channel every 15 s. For each new
+# top-level message addressed to this host ("to: NAME@<self>"), write an inbox
+# file and print its path (one line per message, for Monitor). Messages for
+# other hosts and ordinary chatter are skipped; disallowed names go to dead/.
+# The last processed Slack ts is kept in ~/.agent-relay/slack-last-ts, so a
+# restart neither loses nor repeats messages.
+# ponytail: one page of 100 per poll; past 100 messages per 15 s the oldest are
+# skipped. Page with `cursor` if traffic ever gets there.
+R="$HOME/.agent-relay"
+channel=$(cat "$R/slack-channel") || exit 1
+[ -s "$R/slack-last-ts" ] || date +%s.000000 > "$R/slack-last-ts"
+while true; do
+  "$R/bin/slack-api" conversations.history channel="$channel" oldest="$(cat "$R/slack-last-ts")" limit=100 2>&1 \
+  | R="$R" python3 -c '
+import html, json, os, re, sys, tempfile
+R = os.environ["R"]
+self_host = open(os.path.join(R, "self")).read().strip()
+allow = [re.compile(l.strip()) for l in open(os.path.join(R, "allow")) if l.strip()]
+ok = lambda n: any(a.search(n) for a in allow)
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print("ERR slack response was not JSON"); sys.exit()
+if not d.get("ok"):
+    print("ERR slack", d.get("error")); sys.exit()
+for m in sorted(d.get("messages", []), key=lambda m: float(m["ts"])):
+    ts = m["ts"]
+    text = html.unescape(m.get("text") or "")
+    hdr = re.match(r"to: (\S+)@(\S+)\nfrom: (\S+)@(\S+)\n\n(.*)\Z", text, re.S)
+    if hdr and hdr.group(2) == self_host:
+        to, frm, frm_host, body = hdr.group(1), hdr.group(3), hdr.group(4), hdr.group(5)
+        dest = "inbox" if ok(to) and ok(frm) and len(text.encode()) <= 65536 else "dead"
+        fd, tmp = tempfile.mkstemp(dir=os.path.join(R, dest), prefix=".incoming.")
+        with os.fdopen(fd, "w") as f:
+            f.write("to: %s\nfrom: %s@%s\nslack-ts: %s\n\n%s" % (to, frm, frm_host, ts, body))
+        path = os.path.join(R, dest, "%s.msg" % ts)
+        os.rename(tmp, path)
+        print(path if dest == "inbox" else "DEAD %s (not allowed: to=%s from=%s)" % (path, to, frm), flush=True)
+    with open(os.path.join(R, "slack-last-ts"), "w") as f:
+        f.write(ts)
+'
+  sleep 15
+done
