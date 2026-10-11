@@ -1,0 +1,33 @@
+#!/bin/bash
+# relay-post NAME@HOST FROM < body
+# Post a message for session NAME on HOST to the relay Slack channel.
+# - NAME and FROM must match ~/.agent-relay/allow (personal workspaces only).
+# - The body is scrubbed with voitta-yolt's secret_redact; if that cannot be
+#   loaded the post is refused (fail closed).
+# - The body travels on stdin end to end; it never appears on a command line.
+set -eo pipefail
+R="$HOME/.agent-relay"
+dest="${1:?usage: relay-post NAME@HOST FROM < body}"
+from="${2:?usage: relay-post NAME@HOST FROM < body}"
+name="${dest%@*}"; host="${dest##*@}"
+[ "$name" != "$dest" ] && [ -n "$host" ] || { echo "relay-post: destination must be NAME@HOST" >&2; exit 2; }
+allowed() { printf '%s\n' "$1" | grep -q -E -f "$R/allow"; }
+allowed "$name" || { echo "relay-post: '$name' is not an allowed session" >&2; exit 3; }
+allowed "$from" || { echo "relay-post: '$from' is not an allowed sender" >&2; exit 3; }
+channel=$(cat "$R/slack-channel" 2>/dev/null) || { echo "relay-post: no $R/slack-channel" >&2; exit 4; }
+self=$(cat "$R/self")
+REDACT="${RELAY_SECRET_REDACT:-$R/secret_redact.py}" \
+HDR="$(printf 'to: %s@%s\nfrom: %s@%s' "$name" "$host" "$from" "$self")" \
+python3 -c '
+import importlib.util, os, sys
+p = os.environ["REDACT"]
+if not os.path.exists(p):
+    sys.exit("relay-post: secret_redact not found at %s; refusing to post" % p)
+s = importlib.util.spec_from_file_location("secret_redact", p)
+m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
+body = sys.stdin.read()
+if len(body.encode()) > 30000:
+    sys.exit("relay-post: body over 30000 bytes")
+sys.stdout.write(os.environ["HDR"] + "\n\n" + m.redact(body))
+' | "$R/bin/slack-api" chat.postMessage channel="$channel" unfurl_links=false unfurl_media=false text@- \
+  | python3 -c 'import json,sys; d=json.load(sys.stdin); print("queued slack-ts", d["ts"]) if d.get("ok") else sys.exit("relay-post: slack error %s" % d.get("error"))'

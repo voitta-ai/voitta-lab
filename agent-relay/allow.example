@@ -1,0 +1,6 @@
+# One extended regular expression per line, matched against session names
+# (the part before @machine). Senders and targets must both match.
+# List your personal-project workspaces; anything else is refused.
+^blog:
+^myproject:
+^relay$

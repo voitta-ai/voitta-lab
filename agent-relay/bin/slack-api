@@ -1,0 +1,13 @@
+#!/bin/bash
+# slack-api METHOD [key=value | key@- ...]
+# Call the Slack Web API as this machine's relay bot. The token comes from the
+# macOS Keychain (item named in ~/.agent-relay/keychain-item, default
+# agent-relay-slack) through a file descriptor, so it never appears on a command
+# line. Use key@- to send that field's value from stdin (message bodies), e.g.:
+#   echo hi | slack-api chat.postMessage channel=C123 text@-
+set -eo pipefail
+m="${1:?usage: slack-api METHOD [key=value | key@- ...]}"; shift
+item=$(cat "$HOME/.agent-relay/keychain-item" 2>/dev/null || echo agent-relay-slack)
+args=(); for kv in "$@"; do args+=(--data-urlencode "$kv"); done
+curl -sS -H @<(security find-generic-password -s "$item" -w | sed 's/^/Authorization: Bearer /') \
+  "${args[@]}" "https://slack.com/api/$m"
